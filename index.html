@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>Stock Eats</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,Arial;background:#000;color:white;height:100vh;overflow:hidden;}
+header{padding:10px;text-align:center;font-size:20px;font-weight:600;position:relative;}
+#map{height:45vh;width:100%;}
+#search{display:flex;gap:6px;padding:8px;align-items:center;}
+input{flex:1;padding:14px;border-radius:12px;border:none;font-size:16px;}
+button{padding:14px;border:none;border-radius:12px;background:#ff6f00;color:white;font-size:16px;cursor:pointer;flex:0 0 auto;white-space:nowrap;display:flex;align-items:center;justify-content:center;}
+#go{font-weight:bold;width:60px;height:48px;}
+#gps,#savedToggle{width:60px;height:48px;font-size:22px;}
+#results{height:15vh;overflow:auto;padding:6px;backdrop-filter:blur(12px);}
+.card{padding:10px;border-radius:8px;margin-bottom:6px;background:rgba(50,50,50,.3);cursor:pointer;}
+.card:hover{background:#ff6f00;color:#000;}
+#savedToggle{font-size:22px;display:flex;align-items:center;justify-content:center;}
+#rated{position:fixed;bottom:-320px;left:0;right:0;background:rgba(30,30,30,.95);backdrop-filter:blur(18px);border-radius:18px 18px 0 0;max-height:50vh;transition:.25s;z-index:998;display:flex;flex-direction:column;}
+#ratedHandle{width:60px;height:6px;background:#ff6f00;margin:6px auto;border-radius:3px;cursor:pointer;}
+#ratedList{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.savedCard{display:flex;justify-content:space-between;align-items:center;padding:14px;border-bottom:1px solid #333;font-size:16px;}
+.savedNote{font-style:italic;margin-left:6px;}
+.remove{color:red;font-size:20px;cursor:pointer}
+#drawer{position:fixed;bottom:-320px;left:0;right:0;background:rgba(30,30,30,.95);backdrop-filter:blur(18px);padding:14px;border-radius:18px 18px 0 0;transition:.25s;z-index:999;}
+#drawerClose{position:absolute;top:8px;right:10px;font-size:22px;cursor:pointer;color:#ff6f00;}
+.star{font-size:34px;color:#444;cursor:pointer;margin:0 2px;}
+.star.active{color:gold;}
+#stars{margin:10px 0;}
+#save{width:100%;font-size:18px;margin-top:8px;}
+#note{width:100%;padding:6px;border-radius:8px;margin-top:4px;font-size:16px;}
+.leaflet-popup-content b.name{color:#ff6f00;}
+</style>
+</head>
+
+<body>
+
+<header>🍴 Stock Eats</header>
+
+<div id="search">
+<input id="q" placeholder="Restaurant or address">
+<button id="go">Go</button>
+<button id="gps">📍</button>
+<button id="savedToggle">⭐</button>
+</div>
+
+<div id="map"></div>
+<div id="results"></div>
+
+<div id="rated">
+<div id="ratedHandle"></div>
+<div id="ratedList"></div>
+</div>
+
+<div id="drawer">
+<div id="drawerClose">✕</div>
+<div id="dname"></div>
+<div id="daddr" style="font-size:12px;opacity:.7;margin-bottom:6px"></div>
+<div id="stars">
+<span class="star" data="1">★</span>
+<span class="star" data="2">★</span>
+<span class="star" data="3">★</span>
+<span class="star" data="4">★</span>
+<span class="star" data="5">★</span>
+</div>
+<input type="text" id="note" placeholder="Add note (max 20 chars)" maxlength="20">
+<button id="save">Save Rating</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+const map=L.map('map').setView([51.5,-0.12],12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+let current=null;
+let currentRating=0;
+let markers=[];
+let savedMarkers=[];
+let rated=JSON.parse(localStorage.getItem("rated"))||[];
+
+const results=document.getElementById("results");
+const ratedBox=document.getElementById("ratedList");
+const ratedDrawer=document.getElementById("rated");
+
+function openDrawer(r){
+  current=r;
+  currentRating=r.score||0;
+  document.getElementById("dname").innerHTML=`<b class="name">${r.name}</b>`;
+  document.getElementById("daddr").innerText=r.address;
+  document.getElementById("note").value=r.note||"";
+  updateStars();
+  document.getElementById("drawer").style.bottom="0";
+}
+document.getElementById("drawerClose").onclick=()=>document.getElementById("drawer").style.bottom="-320px";
+
+document.querySelectorAll(".star").forEach(s=>{
+  s.onclick=()=>{
+    currentRating=parseInt(s.dataset.data||s.getAttribute("data"));
+    updateStars();
+  };
+});
+function updateStars(){
+  document.querySelectorAll(".star").forEach(x=>{
+    x.classList.toggle("active",parseInt(x.getAttribute("data"))<=currentRating)
+  });
+}
+
+document.getElementById("save").onclick=()=>{
+  if(!current||!currentRating)return;
+  const note=document.getElementById("note").value.slice(0,20);
+  const e=rated.find(x=>x.name===current.name);
+  if(e){ e.score=currentRating; e.note=note; }
+  else rated.push({...current,score:currentRating,note:note});
+  localStorage.setItem("rated",JSON.stringify(rated));
+  document.getElementById("drawer").style.bottom="-320px";
+  renderRated();
+};
+
+function renderRated(){
+  rated.sort((a,b)=>b.score-a.score);
+  ratedBox.innerHTML="";
+  savedMarkers.forEach(m=>map.removeLayer(m));
+  savedMarkers=[];
+
+  rated.forEach((r,i)=>{
+    const d=document.createElement("div");
+    d.className="savedCard";
+    const noteText=r.note?`<span class="savedNote">${r.note}</span>`:'';
+    d.innerHTML=`<span>${r.name} ${"★".repeat(r.score)} ${noteText}</span><span class="remove">✕</span>`;
+    d.querySelector(".remove").onclick=e=>{
+      e.stopPropagation();
+      rated.splice(i,1);
+      localStorage.setItem("rated",JSON.stringify(rated));
+      renderRated();
+    };
+    d.onclick=()=>{
+      map.setView([r.lat,r.lng],17);
+      L.popup().setLatLng([r.lat,r.lng])
+       .setContent(`<b class="name">${r.name}</b><br>${r.address}<br>${"★".repeat(r.score)} ${noteText}`)
+       .openOn(map);
+    };
+    ratedBox.appendChild(d);
+
+    const m=L.marker([r.lat,r.lng],{
+      icon:L.icon({iconUrl:"https://maps.gstatic.com/mapfiles/ms2/micons/green-dot.png",iconSize:[32,32]})
+    }).addTo(map);
+    savedMarkers.push(m);
+  });
+}
+
+document.getElementById("savedToggle").onclick=()=>{
+  ratedDrawer.style.bottom= ratedDrawer.style.bottom==="0px" ? "-320px" : "0px";
+};
+
+async function search(){
+  markers.forEach(m=>map.removeLayer(m));
+  markers=[];
+  results.innerHTML="";
+
+  const q=document.getElementById("q").value.trim();
+  if(!q)return;
+
+  const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&limit=6&countrycodes=gb`);
+  const data=await res.json();
+
+  data.forEach(p=>{
+    const lat=+p.lat,lng=+p.lon;
+    const name=p.display_name.split(",")[0];
+    const obj={name,address:p.display_name,lat,lng};
+
+    const m=L.marker([lat,lng],{
+      icon:L.icon({iconUrl:"https://maps.gstatic.com/mapfiles/ms2/micons/orange-dot.png",iconSize:[32,32]})
+    }).addTo(map);
+    markers.push(m);
+    m.on("click",()=>openDrawer(obj));
+
+    const c=document.createElement("div");
+    c.className="card";
+    c.innerHTML=`<b>${name}</b><small>${p.display_name}</small>`;
+    c.onclick=()=>{map.setView([lat,lng],17);openDrawer(obj)};
+    results.appendChild(c);
+  });
+}
+
+document.getElementById("go").onclick=search;
+document.getElementById("q").addEventListener("keydown",e=>{if(e.key==="Enter")search()});
+
+document.getElementById("gps").onclick=()=>{
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    const lat0=pos.coords.latitude;
+    const lon0=pos.coords.longitude;
+    map.setView([lat0,lon0],15);
+
+    markers.forEach(m=>map.removeLayer(m));
+    markers=[];
+    results.innerHTML="";
+
+    rated.forEach(r=>{
+      const dist=Math.sqrt((r.lat-lat0)**2 + (r.lng-lon0)**2)*69;
+      if(dist<=1){
+        const m=L.marker([r.lat,r.lng],{
+          icon:L.icon({iconUrl:"https://maps.gstatic.com/mapfiles/ms2/micons/green-dot.png",iconSize:[32,32]})
+        }).addTo(map);
+        markers.push(m);
+        m.on("click",()=>openDrawer(r));
+
+        const c=document.createElement("div");
+        c.className="card";
+        c.innerHTML=`<b>${r.name}</b><small>${r.address}</small>`;
+        c.onclick=()=>{map.setView([r.lat,r.lng],17);openDrawer(r)};
+        results.appendChild(c);
+      }
+    });
+
+    const delta=0.0145;
+    const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=restaurant&limit=10&viewbox=${lon0-delta},${lat0+delta},${lon0+delta},${lat0-delta}&bounded=1`);
+    const data=await res.json();
+    data.forEach(p=>{
+      const lat=+p.lat,lng=+p.lon;
+      const name=p.display_name.split(",")[0];
+      const obj={name,address:p.display_name,lat,lng};
+      if(!rated.some(r=>r.name===obj.name)){
+        const m=L.marker([lat,lng],{
+          icon:L.icon({iconUrl:"https://maps.gstatic.com/mapfiles/ms2/micons/orange-dot.png",iconSize:[32,32]})
+        }).addTo(map);
+        markers.push(m);
+        m.on("click",()=>openDrawer(obj));
+
+        const c=document.createElement("div");
+        c.className="card";
+        c.innerHTML=`<b>${name}</b><small>${p.display_name}</small>`;
+        c.onclick=()=>{map.setView([lat,lng],17);openDrawer(obj)};
+        results.appendChild(c);
+      }
+    });
+  });
+};
+
+renderRated();
+</script>
+</body>
+</html>
