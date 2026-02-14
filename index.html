@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Stock Eats</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+
+body{
+font-family:system-ui;
+background:#0f0f0f;
+color:white;
+height:100vh;
+overflow:hidden
+}
+
+header{
+padding:10px;
+text-align:center;
+font-weight:600;
+}
+
+#search{
+display:flex;
+gap:6px;
+padding:8px
+}
+
+input{
+flex:1;
+padding:10px;
+border-radius:10px;
+border:none;
+background:#1f1f1f;
+color:white
+}
+
+button{
+padding:10px 14px;
+border:none;
+border-radius:10px;
+background:#ff6f00;
+color:white;
+font-weight:600
+}
+
+select{
+width:100%;
+padding:8px;
+margin-bottom:6px;
+border-radius:10px;
+background:#1f1f1f;
+color:white;
+border:none
+}
+
+#layout{
+display:grid;
+grid-template-columns:1fr 1.6fr 1fr;
+gap:6px;
+height:calc(100vh - 90px);
+padding:6px
+}
+
+.panel{
+background:#1b1b1b;
+border-radius:14px;
+padding:6px;
+overflow:auto
+}
+
+.card{
+padding:10px;
+border-radius:12px;
+cursor:pointer;
+margin-bottom:6px;
+background:#242424;
+display:flex;
+justify-content:space-between;
+align-items:center
+}
+
+.card:hover{background:#ff6f00}
+
+.savedName{font-weight:600}
+
+.savedX{color:red;font-size:14px}
+
+#map{border-radius:14px}
+
+#drawer{
+position:fixed;
+bottom:-220px;
+left:0;right:0;
+background:#1b1b1b;
+padding:12px;
+border-radius:16px 16px 0 0;
+transition:.3s;
+z-index:9999
+}
+
+.star{
+font-size:28px;
+cursor:pointer;
+color:#555
+}
+
+.star.active{color:gold}
+
+@media(max-width:900px){
+
+#layout{
+grid-template-columns:1fr;
+grid-template-rows:200px auto auto;
+height:auto
+}
+
+body{overflow:auto}
+
+.panel{max-height:240px}
+
+#map{height:300px}
+}
+</style>
+</head>
+
+<body>
+
+<header>
+<h2>🍴 Stock Eats</h2>
+</header>
+
+<div id="search">
+<input id="q" placeholder="Restaurant + city">
+<button id="go">Search</button>
+</div>
+
+<div id="layout">
+
+<div class="panel" id="results"></div>
+
+<div id="map"></div>
+
+<div class="panel">
+
+<select id="ratingFilter">
+<option value="">All Ratings</option>
+<option value="5">★★★★★</option>
+<option value="4">★★★★+</option>
+<option value="3">★★★+</option>
+<option value="2">★★+</option>
+<option value="1">★+</option>
+</select>
+
+<div id="rated"></div>
+
+</div>
+</div>
+
+<div id="drawer">
+<div id="dname"></div>
+<div id="daddr" style="font-size:12px;font-style:italic;margin-bottom:6px"></div>
+
+<div id="stars">
+<span class="star" data-value="1">★</span>
+<span class="star" data-value="2">★</span>
+<span class="star" data-value="3">★</span>
+<span class="star" data-value="4">★</span>
+<span class="star" data-value="5">★</span>
+</div>
+
+<button id="save" style="margin-top:8px;width:100%">Save Rating</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+const map=L.map('map').setView([51.5,-0.12],10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+let current=null;
+let currentRating=0;
+let markers=[];
+let savedMarkers=[];
+let rated=JSON.parse(localStorage.getItem("rated"))||[];
+
+const results=document.getElementById("results");
+const ratedBox=document.getElementById("rated");
+const drawer=document.getElementById("drawer");
+
+function openDrawer(r){
+current=r;
+currentRating=r.score||0;
+document.querySelectorAll(".star").forEach(s=>{
+s.classList.toggle("active",parseInt(s.dataset.value)<=currentRating);
+});
+document.getElementById("dname").innerText=r.name;
+document.getElementById("daddr").innerText=r.address;
+drawer.style.bottom="0";
+}
+
+document.querySelectorAll(".star").forEach(s=>{
+s.onclick=()=>{
+currentRating=parseInt(s.dataset.value);
+document.querySelectorAll(".star").forEach(x=>{
+x.classList.toggle("active",parseInt(x.dataset.value)<=currentRating)
+});
+};
+});
+
+document.getElementById("save").onclick=()=>{
+if(!current||!currentRating)return alert("Select stars");
+
+current.score=currentRating;
+
+const existing=rated.find(x=>x.name===current.name);
+if(existing) existing.score=currentRating;
+else rated.push(current);
+
+localStorage.setItem("rated",JSON.stringify(rated));
+drawer.style.bottom="-220px";
+renderRated();
+renderSavedPins();
+};
+
+function renderRated(){
+rated.sort((a,b)=>b.score-a.score);
+
+ratedBox.innerHTML="";
+
+const min=document.getElementById("ratingFilter").value;
+
+rated.filter(r=>{
+if(min && r.score<min) return false;
+return true;
+}).forEach((r,i)=>{
+const d=document.createElement("div");
+d.className="card";
+d.innerHTML=`<span class="savedName">${r.name}</span><span>${"★".repeat(r.score)} <span class="savedX">❌</span></span>`;
+d.onclick=()=>center(r.lat,r.lng,r);
+d.querySelector(".savedX").onclick=e=>{
+e.stopPropagation();
+rated.splice(i,1);
+localStorage.setItem("rated",JSON.stringify(rated));
+renderRated();
+renderSavedPins();
+};
+ratedBox.appendChild(d);
+});
+}
+
+document.getElementById("ratingFilter").onchange=renderRated;
+
+function center(lat,lng,r){
+map.setView([lat,lng],16);
+showPopup(r);
+}
+
+function showPopup(r){
+L.popup().setLatLng([r.lat,r.lng])
+.setContent(`<b>${r.name}</b><br>${r.address}<br>${"★".repeat(r.score||0)}`)
+.openOn(map);
+}
+
+function renderSavedPins(){
+savedMarkers.forEach(m=>map.removeLayer(m));
+savedMarkers=[];
+rated.forEach(r=>{
+const m=L.circleMarker([r.lat,r.lng],{radius:8,color:"lime"}).addTo(map);
+m.on("click",()=>{openDrawer(r);showPopup(r)});
+savedMarkers.push(m);
+});
+}
+
+async function search(){
+markers.forEach(m=>map.removeLayer(m));
+markers=[];
+results.innerHTML="";
+
+const q=document.getElementById("q").value.trim();
+if(!q)return;
+
+const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}+UK&limit=6`);
+const data=await res.json();
+
+data.forEach(p=>{
+const name=p.display_name.split(",")[0];
+const lat=+p.lat,lng=+p.lon;
+
+const obj={name,address:p.display_name,lat,lng};
+
+const m=L.circleMarker([lat,lng],{radius:8,color:"orange"}).addTo(map);
+markers.push(m);
+
+m.on("click",()=>{openDrawer(obj);showPopup(obj)});
+
+const c=document.createElement("div");
+c.className="card";
+c.innerHTML=`
+<div>
+<b>${name}</b><br>
+<small style="font-style:italic;color:#aaa">${p.display_name}</small>
+</div>`;
+c.onclick=()=>{openDrawer(obj);showPopup(obj);map.setView([lat,lng],16)};
+results.appendChild(c);
+});
+}
+
+document.getElementById("go").onclick=search;
+document.getElementById("q").addEventListener("keydown",e=>{if(e.key==="Enter")search()});
+
+renderRated();
+renderSavedPins();
+</script>
+
+</body>
+</html>
